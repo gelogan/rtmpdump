@@ -3782,12 +3782,18 @@ HandShake(RTMP *r, int FP9HandShake)
 
   /* decode server response */
 
-  memcpy(&suptime, serversig, 4);
-  suptime = ntohl(suptime);
+  if (RTMP_SIG_SIZE >= 8) {
+      memcpy(&suptime, serversig, 4);
+      suptime = ntohl(suptime);
 
-  RTMP_Log(RTMP_LOGDEBUG, "%s: Server Uptime : %d", __FUNCTION__, suptime);
-  RTMP_Log(RTMP_LOGDEBUG, "%s: FMS Version   : %d.%d.%d.%d", __FUNCTION__,
-      serversig[4], serversig[5], serversig[6], serversig[7]);
+      RTMP_Log(RTMP_LOGDEBUG, "%s: Server Uptime : %d", __FUNCTION__, suptime);
+      RTMP_Log(RTMP_LOGDEBUG, "%s: FMS Version   : %d.%d.%d.%d", __FUNCTION__,
+          (unsigned char)serversig[4], (unsigned char)serversig[5], 
+          (unsigned char)serversig[6], (unsigned char)serversig[7]);
+  } else {
+      RTMP_Log(RTMP_LOGERROR, "%s: Invalid signature size", __FUNCTION__);
+      return FALSE;
+  }
 
   /* 2nd part of handshake */
   if (!WriteN(r, serversig, RTMP_SIG_SIZE))
@@ -3845,12 +3851,18 @@ SHandShake(RTMP *r)
 
   /* decode client response */
 
-  memcpy(&uptime, clientsig, 4);
-  uptime = ntohl(uptime);
+  if (RTMP_SIG_SIZE >= 8) {
+      memcpy(&uptime, clientsig, 4);
+      uptime = ntohl(uptime);
 
-  RTMP_Log(RTMP_LOGDEBUG, "%s: Client Uptime : %d", __FUNCTION__, uptime);
-  RTMP_Log(RTMP_LOGDEBUG, "%s: Player Version: %d.%d.%d.%d", __FUNCTION__,
-      clientsig[4], clientsig[5], clientsig[6], clientsig[7]);
+      RTMP_Log(RTMP_LOGDEBUG, "%s: Client Uptime : %d", __FUNCTION__, uptime);
+      RTMP_Log(RTMP_LOGDEBUG, "%s: Player Version: %d.%d.%d.%d", __FUNCTION__,
+          (unsigned char)clientsig[4], (unsigned char)clientsig[5],
+          (unsigned char)clientsig[6], (unsigned char)clientsig[7]);
+  } else {
+      RTMP_Log(RTMP_LOGERROR, "%s: Invalid signature size", __FUNCTION__);
+      return FALSE;
+  }
 
   /* 2nd part of handshake */
   if (!WriteN(r, clientsig, RTMP_SIG_SIZE))
