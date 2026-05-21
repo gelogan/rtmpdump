@@ -3,8 +3,7 @@ VERSION=v2.4
 prefix=/usr/local
 
 CC=$(CROSS_COMPILE)gcc
-LD=$(CROSS_COMPILE)ld
-
+ 
 SYS=posix
 #SYS=mingw
 
@@ -22,6 +21,7 @@ CRYPTO_DEF=$(DEF_$(CRYPTO))
 DEF=-DRTMPDUMP_VERSION=\"$(VERSION)\" $(CRYPTO_DEF) $(XDEF)
 OPT=-O2
 CFLAGS=-Wall $(XCFLAGS) $(INC) $(DEF) $(OPT)
+CFLAGS+=-g -fsanitize=address
 LDFLAGS=-Wall $(XLDFLAGS)
 
 bindir=$(prefix)/bin

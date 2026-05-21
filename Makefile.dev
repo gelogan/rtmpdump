@@ -1,0 +1,144 @@
+# 定义程序的版本号
+VERSION=v2.4
+
+# 默认的安装前缀路径（通常在Linux中安装到 /usr/local）
+prefix=/usr/local
+
+# 编译器(CC)和链接器(LD)设置。
+# $(CROSS_COMPILE) 允许你在执行 make 时传入环境变量进行交叉编译（例如 make CROSS_COMPILE=arm-linux-gnueabihf-）
+CC=$(CROSS_COMPILE)gcc
+LD=$(CROSS_COMPILE)ld
+
+# 目标操作系统，默认为 posix (如 Linux, Unix)。可以修改为 mingw 来编译 Windows 版本。
+SYS=posix
+#SYS=mingw
+
+# 选择使用的加密库，默认为 OPENSSL。
+CRYPTO=OPENSSL
+#CRYPTO=POLARSSL
+#CRYPTO=GNUTLS
+
+# 定义各种加密库所需的链接参数 (zlib 是基础，其他是特定的加密库)
+LIBZ=-lz
+LIB_GNUTLS=-lgnutls -lhogweed -lnettle -lgmp $(LIBZ)
+LIB_OPENSSL=-lssl -lcrypto $(LIBZ)
+LIB_POLARSSL=-lpolarssl $(LIBZ)
+
+# 根据上面选定的 $(CRYPTO) 变量，动态推导出实际需要链接的加密库参数。
+# 例如，如果 CRYPTO=OPENSSL，则 $(CRYPTO_LIB) 就是 $(LIB_OPENSSL) 的值。
+CRYPTO_LIB=$(LIB_$(CRYPTO))
+
+# 定义如果没有加密库时的宏定义为空，或者根据选择的加密库添加相应的宏定义
+DEF_=-DNO_CRYPTO
+CRYPTO_DEF=$(DEF_$(CRYPTO))
+
+# 最终的宏定义 (DEF)：包含版本号、加密库宏定义以及用户自定义的宏 (XDEF)
+DEF=-DRTMPDUMP_VERSION=\"$(VERSION)\" $(CRYPTO_DEF) $(XDEF)
+# 编译器优化级别，-O2 表示开启大部分优化
+OPT=-O2
+# 最终的 C 编译选项：开启所有警告 (-Wall)，加上用户自定义标志 (XCFLAGS)、头文件路径 (INC)、宏定义 (DEF) 和优化级别 (OPT)
+CFLAGS=-Wall $(XCFLAGS) $(INC) $(DEF) $(OPT)
+# 最终的链接选项
+LDFLAGS=-Wall $(XLDFLAGS)
+
+# 定义各个类型的安装子目录
+bindir=$(prefix)/bin       # 存放普通可执行文件
+sbindir=$(prefix)/sbin     # 存放系统级/服务端可执行文件
+mandir=$(prefix)/man       # 存放手册页
+
+# 支持 $(DESTDIR) 前缀，这在打包deb/rpm等安装包时非常有用（常用于将文件安装到临时打包目录）
+BINDIR=$(DESTDIR)$(bindir)
+SBINDIR=$(DESTDIR)$(sbindir)
+MANDIR=$(DESTDIR)$(mandir)
+
+# 根据不同的操作系统平台 (SYS)，定义所需的特定系统链接库
+LIBS_posix=
+LIBS_darwin=
+LIBS_mingw=-lws2_32 -lwinmm -lgdi32   # Windows平台需要网络和多媒体等核心库
+
+# 定义内部 librtmp 库的链接参数
+LIB_RTMP=-Llibrtmp -lrtmp
+
+# 汇总常规程序所需的所有链接库
+LIBS=$(LIB_RTMP) $(CRYPTO_LIB) $(LIBS_$(SYS)) $(XLIBS)
+
+# 根据不同的操作系统平台，定义多线程库（Linux/macOS用pthread，Windows原生包含不需要单独链接）
+THREADLIB_posix=-lpthread
+THREADLIB_darwin=-lpthread
+THREADLIB_mingw=
+THREADLIB=$(THREADLIB_$(SYS))
+
+# 服务端程序（需要多线程支持）汇总的所有链接库
+SLIBS=$(THREADLIB) $(LIBS)
+
+# 定义内部库文件的位置和所需依赖的头文件
+LIBRTMP=librtmp/librtmp.a
+INCRTMP=librtmp/rtmp_sys.h librtmp/rtmp.h librtmp/log.h librtmp/amf.h
+
+# 根据不同操作系统，定义可执行文件的后缀名（Windows 为 .exe，其他平台为空）
+EXT_posix=
+EXT_darwin=
+EXT_mingw=.exe
+EXT=$(EXT_$(SYS))
+
+# 本 Makefile 需要编译出来的四个目标可执行文件
+PROGS=rtmpdump rtmpgw rtmpsrv rtmpsuck
+
+# === 下面是 Makefile 的构建规则 ===
+
+# 默认目标：当直接执行 'make' 时，会编译依赖项 $(LIBRTMP) 和所有可执行程序 $(PROGS)
+all:    $(LIBRTMP) $(PROGS)
+
+# 所有可执行程序都依赖于 $(LIBRTMP) 库（必须先编译库，再编译程序）
+$(PROGS): $(LIBRTMP)
+
+# 安装规则：将编译好的文件复制到系统对应的目录中
+install:    $(PROGS)
+	# 创建目标目录
+	-mkdir -p $(BINDIR) $(SBINDIR) $(MANDIR)/man1 $(MANDIR)/man8
+	# 复制客户端可执行文件
+	cp rtmpdump$(EXT) $(BINDIR)
+	# 复制服务端可执行文件
+	cp rtmpgw$(EXT) rtmpsrv$(EXT) rtmpsuck$(EXT) $(SBINDIR)
+	# 复制 man 手册页
+	cp rtmpdump.1 $(MANDIR)/man1
+	cp rtmpgw.8 $(MANDIR)/man8
+	# 进入 librtmp 子目录，执行该目录下的 Makefile 的 install 规则
+	@cd librtmp; $(MAKE) install
+
+# 清理规则：删除所有生成的中间文件和可执行文件
+clean:
+	rm -f *.o rtmpdump$(EXT) rtmpgw$(EXT) rtmpsrv$(EXT) rtmpsuck$(EXT)
+	# 进入 librtmp 子目录并清理
+	@cd librtmp; $(MAKE) clean
+
+# 一个伪目标，用于强制触发更新
+FORCE:
+
+# 编译 librtmp 静态库的规则：进入子目录并执行该子目录的 Makefile
+$(LIBRTMP): FORCE
+	@cd librtmp; $(MAKE) all
+
+# 编译 rtmpdump 程序的具体规则
+rtmpdump: rtmpdump.o
+	$(CC) $(LDFLAGS) -o $@$(EXT) $@.o $(LIBS)
+
+# 编译 rtmpsrv 程序（服务端应用，依赖 thread.o 和多线程库 SLIBS）
+rtmpsrv: rtmpsrv.o thread.o
+	$(CC) $(LDFLAGS) -o $@$(EXT) $@.o thread.o $(SLIBS)
+
+# 编译 rtmpsuck 程序（抓取代理应用，依赖 thread.o 和多线程库 SLIBS）
+rtmpsuck: rtmpsuck.o thread.o
+	$(CC) $(LDFLAGS) -o $@$(EXT) $@.o thread.o $(SLIBS)
+
+# 编译 rtmpgw 程序（网关应用，依赖 thread.o 和多线程库 SLIBS）
+rtmpgw: rtmpgw.o thread.o
+	$(CC) $(LDFLAGS) -o $@$(EXT) $@.o thread.o $(SLIBS)
+
+# 定义源文件 (.o) 对其对应的 (.c) 源码文件和头文件 (.h) 的依赖关系。
+# 这样当这些 .c 或 .h 文件被修改时，make 能自动检测到并重新编译对应的 .o 文件。
+rtmpgw.o: rtmpgw.c $(INCRTMP) Makefile
+rtmpdump.o: rtmpdump.c $(INCRTMP) Makefile
+rtmpsrv.o: rtmpsrv.c $(INCRTMP) Makefile
+rtmpsuck.o: rtmpsuck.c $(INCRTMP) Makefile
+thread.o: thread.c thread.h

@@ -130,6 +130,19 @@ static const AVal av_token = AVC("token");
 static const AVal av_playlist = AVC("playlist");
 static const AVal av_true = AVC("true");
 
+/**
+ * @brief 打开并解析 FLV 文件以获取流信息和元数据。
+ *
+ * @param[in] flvFile     FLV 文件的文件名。
+ * @param[out] file        指向已打开文件指针的指针，成功时指向 FLV 文件流。
+ * @param[out] size        指向文件总大小（字节）的指针。
+ * @param[out] metaHeader  指向从文件中读取的元数据（MetaData）的内存块的指针，调用者需要释放。
+ * @param[out] nMetaHeaderSize 指向元数据大小的指针（以字节为单位）。
+ * @param[out] duration    指向流持续时间（毫秒）的指针。
+ *
+ * @retval RD_SUCCESS 成功打开并解析文件。
+ * @retval RD_FAILED  解析失败，例如文件格式错误或找不到元数据。
+ */
 int
 OpenResumeFile(const char *flvFile,	// file name [in]
 	       FILE ** file,	// opened file [out]
@@ -270,6 +283,18 @@ OpenResumeFile(const char *flvFile,	// file name [in]
   return RD_SUCCESS;
 }
 
+/**
+ * @brief 从文件中获取最后一个关键帧的信息。
+ *
+ * @param[in] file 用于读取的媒体文件指针。
+ * @param[in] nSkipKeyFrames 搜索关键帧时最多跳过的帧数。
+ * @param[out] dSeek 最后一个关键帧的时间戳（offset）。
+ * @param[out] initialFrame 指向最后一个关键帧内容的指针，需要调用者负责释放。
+ * @param[out] initialFrameType 最后一个关键帧的类型（音频/视频）。
+ * @param[out] nInitialFrameSize 最后一个关键帧内容的长度。
+ * @retval RD_SUCCESS 成功获取到最后一个关键帧信息。
+ * @retval RD_FAILED 文件读取或格式检查失败。
+ */
 int
 GetLastKeyframe(FILE * file,	// output file [in]
 		int nSkipKeyFrames,	// max number of frames to skip when searching for key frame [in]
