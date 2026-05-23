@@ -691,7 +691,29 @@ static void rtmpe9_sig(uint8_t *in, uint8_t *out, int keyid)
   out[6] = (d[1] >> 16) & 0xff;
   out[7] = (d[1] >> 24) & 0xff;
 }
-
+/**
+ * @brief 执行 RTMP 握手过程，协商协议版本、加密密钥并进行安全验证。
+ *
+ * 该函数根据连接协议标志和 SWF 信息自动选择普通握手或 FP9/RTMPE 握手，
+ * 完成客户端与服务器之间的 Diffie‑Hellman 密钥交换（加密时）、摘要验证、
+ * SWF 校验以及签名响应，并将协商好的加密上下文写入 RTMP 连接结构。
+ *
+ * @param[in,out] r          指向 RTMP 连接上下文的指针，函数会读取其中的协议、SWF 等字段，
+ *                           并在握手成功后填充 DH 密钥、RC4 加解密密钥等状态。
+ * @param[in]     FP9HandShake 是否尝试 FP9 握手（非零表示尝试）。
+ *                           该参数按值传递，函数内部可能覆盖该值以适配服务器版本，
+ *                           但调用方不可见其修改。
+ *
+ * @return 返回握手结果：
+ * @retval TRUE  (非零) 握手成功，协商的加密密钥已就绪。
+ * @retval FALSE (0)     握手失败，具体原因包括但不限于：
+ *                        - Diffie‑Hellman 初始化或密钥生成失败
+ *                        - 公钥提取/写入失败
+ *                        - 网络读写错误
+ *                        - 服务器摘要验证失败
+ *                        - 签名不匹配
+ *                       失败时通过 RTMP_Log 输出错误日志。
+ */
 static int
 HandShake(RTMP * r, int FP9HandShake)
 {
@@ -706,7 +728,8 @@ HandShake(RTMP * r, int FP9HandShake)
   int32_t *ip;
   uint32_t uptime;
 
-  uint8_t clientbuf[RTMP_SIG_SIZE + 4], *clientsig=clientbuf+4;
+# 此处+4是为了字节对齐以及CO字段
+  uint8_t clientbuf[RTMP_SIG_SIZE + 4], *clientsig=clientbuf+4; 
   uint8_t serversig[RTMP_SIG_SIZE], client2[RTMP_SIG_SIZE], *reply;
   uint8_t type;
   getoff *getdh = NULL, *getdig = NULL;
@@ -810,10 +833,23 @@ HandShake(RTMP * r, int FP9HandShake)
   RTMP_Log(RTMP_LOGDEBUG, "Clientsig: ");
   RTMP_LogHex(RTMP_LOGDEBUG, clientsig, RTMP_SIG_SIZE);
 #endif
-
+/* 
+  * (char *)clientsig - 1 指向的就是 C0（1 字节的版本/协议类型，值为 0x03 或 0x06）。
+  紧随其后的就是 C1（1536 字节的握手核心数据，包含了时间戳和随机数或公钥摘要）。
+  长度是 RTMP_SIG_SIZE + 1，即 $1536 + 1 = 1537$ 字节。
+  客户端一口气把 C0 和 C1 揉成一个整包，
+  通过网络发送给流媒体服务器。如果发送失败（比如网络断开），函数立刻返回 FALSE 中断连接。
+*/
   if (!WriteN(r, (char *)clientsig-1, RTMP_SIG_SIZE + 1))
     return FALSE;
+/*
+这一步客户端只调用 ReadN 读取了 1 个字节，存入了变量 type 中。
+这个字节就是服务端回应的 S0（服务器确认的协议版本）。
 
+客户端在发送完数据后，开始在网络上“阻塞等待”服务端的响应。
+它先尝试把服务端的第一个字节（S0）读出来。
+如果连 1 个字节都读不到，说明服务端根本没理你，直接报错返回 FALSE
+*/
   if (ReadN(r, (char *)&type, 1) != 1)	/* 0x03 or 0x06 */
     return FALSE;
 
@@ -822,7 +858,8 @@ HandShake(RTMP * r, int FP9HandShake)
   if (type != clientsig[-1])
     RTMP_Log(RTMP_LOGWARNING, "%s: Type mismatch: client sent %d, server answered %d",
 	__FUNCTION__, clientsig[-1], type);
-
+/*负责把剩下的 S1 读进来,这一步读取了 RTMP_SIG_SIZE（1536 字节），
+ * 也就是服务器的 S1 握手包。*/
   if (ReadN(r, (char *)serversig, RTMP_SIG_SIZE) != RTMP_SIG_SIZE)
     return FALSE;
 
@@ -847,7 +884,8 @@ HandShake(RTMP * r, int FP9HandShake)
       uint8_t digestResp[SHA256_DIGEST_LENGTH];
       uint8_t *signatureResp = NULL;
 
-      /* we have to use this signature now to find the correct algorithms for getting the digest and DH positions */
+      /* we have to use this signature now to find the correct algorithms
+       * for getting the digest and DH positions */
       int digestPosServer = getdig(serversig, RTMP_SIG_SIZE);
 
       if (!VerifyDigest(digestPosServer, serversig, GenuineFMSKey, 36))
@@ -965,9 +1003,18 @@ HandShake(RTMP * r, int FP9HandShake)
     __FUNCTION__);
   RTMP_LogHex(RTMP_LOGDEBUG, reply, RTMP_SIG_SIZE);
 #endif
+/*
+握手第二阶段的逻辑就是：“证明我收到了你发的数据”。
+
+服务端给客户端发一个 1536 字节的随机数（S1）。
+
+客户端把它作为 C2 原样发回去。服务端一看：“嗯，刚才我发给你的随机数你原封不动地还给我了，
+说明你确实完整收到了我的 S1 信号，握手成功！
+*/
   if (!WriteN(r, (char *)reply, RTMP_SIG_SIZE))
     return FALSE;
-
+/*当客户端用 WriteN 把 C2 包丢给服务端后，
+ * 它紧接着调用 ReadN 等待读入服务器回传的 S2 包（1536 字节）。 */
   /* 2nd part of handshake */
   if (ReadN(r, (char *)serversig, RTMP_SIG_SIZE) != RTMP_SIG_SIZE)
     return FALSE;
@@ -1057,6 +1104,9 @@ HandShake(RTMP * r, int FP9HandShake)
     }
   else
     {
+      /*如果 memcmp == 0（完全相同）：
+说明服务端非常诚实，完美地把我第一步发过去的
+1536 字节随机数给送回来了。两端数据完全对齐，握手宣告成功！ */
       if (memcmp(serversig, clientsig, RTMP_SIG_SIZE) != 0)
 	{
 	  RTMP_Log(RTMP_LOGWARNING, "%s: client signature does not match!",
@@ -1320,7 +1370,6 @@ SHandShake(RTMP * r)
       memcpy(clientsig+4, &uptime, 4);
     }
 #endif
-
   RTMP_Log(RTMP_LOGDEBUG2, "%s: Sending handshake response: ",
     __FUNCTION__);
   RTMP_LogHex(RTMP_LOGDEBUG2, clientsig, RTMP_SIG_SIZE);
@@ -1331,7 +1380,7 @@ SHandShake(RTMP * r)
   /* 2nd part of handshake */
   if (ReadN(r, (char *)clientsig, RTMP_SIG_SIZE) != RTMP_SIG_SIZE)
     return FALSE;
-
+  
   RTMP_Log(RTMP_LOGDEBUG2, "%s: 2nd handshake: ", __FUNCTION__);
   RTMP_LogHex(RTMP_LOGDEBUG2, clientsig, RTMP_SIG_SIZE);
 

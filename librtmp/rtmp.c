@@ -1221,7 +1221,16 @@ RTMP_GetNextMediaPacket(RTMP *r, RTMPPacket *packet)
 
   return bHasMediaPacket;
 }
-
+/**
+ * @brief 处理客户端接收到的 RTMP 数据包，根据包类型进行分发并更新媒体状态。
+ *
+ * @param[in,out] r        RTMP 会话上下文，函数将修改其中的媒体通道、时间戳等状态。
+ * @param[in]     packet   指向已接收并解析完成的 RTMP 数据包的指针，函数仅读取其内容，不修改。
+ *
+ * @retval 0  没有媒体数据包（控制包、未支持包等）。
+ * @retval 1  收到媒体数据包（音频、视频或元数据、FLV 流）。
+ * @retval 2  收到远程调用（Invoke 或 Flex Message）响应且调用成功，通常携带媒体连接信息。
+ */
 int
 RTMP_ClientPacket(RTMP *r, RTMPPacket *packet)
 {
@@ -1385,7 +1394,22 @@ RTMP_ClientPacket(RTMP *r, RTMPPacket *packet)
 extern FILE *netstackdump;
 extern FILE *netstackdump_read;
 #endif
-
+/**
+ * @brief 从 RTMP 连接中读取指定长度的数据到缓冲区
+ *
+ * 该函数会从 RTMP 连接(r)的内部接收缓冲区中尝试读取最多 n 字节的数据，
+ * 并将其复制到调用者提供的 buffer 中。读取过程中会处理底层 socket 填充、
+ * HTTP 模式下的分块响应解析、RC4 解密，并在需要时发送接收字节量确认。
+ * 若遇到超时、连接断开或 HTTP 协议错误，将自动关闭连接并返回已读字节数（可能为0）。
+ *
+ * @param[in,out] r         指向 RTMP 连接上下文，函数将更新其内部缓冲区、应答数据和统计计数器。
+ * @param[out]    buffer    输出缓冲区，用于存放读取到的数据，调用者需保证至少 n 字节可用。
+ * @param[in]     n         请求读取的最大字节数。
+ *
+ * @return 实际读取并写入 buffer 的字节数。
+ * @retval 0  未读取到任何数据，通常表示连接已关闭或发生致命传输错误。
+ * @retval >0 成功读取的字节数，且返回值 ≤ n。
+ */
 static int
 ReadN(RTMP *r, char *buffer, int n)
 {
@@ -1498,6 +1522,16 @@ ReadN(RTMP *r, char *buffer, int n)
   return nOriginalSize - n;
 }
 
+/**
+ * @brief 向 RTMP 连接发送指定长度的数据。
+ *
+ * @param[in]     r       RTMP 会话上下文，包含连接属性与发送缓冲区。
+ * @param[in]     buffer  待发送数据的只读内存块。
+ * @param[in]     n       buffer 中需要发送的字节数。
+ *
+ * @retval 1  数据已全部成功发出（剩余未发送字节为 0）。
+ * @retval 0  发送过程中发生错误或连接已关闭，未完成写入。
+ */
 static int
 WriteN(RTMP *r, const char *buffer, int n)
 {
@@ -4304,7 +4338,14 @@ RTMPSockBuf_Fill(RTMPSockBuf *sb)
 
   return nBytes;
 }
-
+/**
+ * @brief   发送指定长度的数据到 RTMP 连接的套接字缓冲区。
+ * @param[in]   sb  指向 RTMP 套接字缓冲区对象的指针，提供套接字与 SSL 上下文。
+ * @param[in]   buf 待发送的数据缓冲区，内容只读。
+ * @param[in]   len 待发送的数据长度（字节数）。
+ * @return  实际发送的字节数（非负数）。
+ * @retval   -1  发送过程中发生错误。
+ */
 int
 RTMPSockBuf_Send(RTMPSockBuf *sb, const char *buf, int len)
 {
@@ -4414,7 +4455,23 @@ DecodeTEA(AVal *key, AVal *text)
   memcpy(text->av_val, out, text->av_len);
   free(out);
 }
-
+/**
+ * @brief 通过 HTTP POST 方法发送 RTMPT 命令及负载数据。
+ * 
+ * 构造 HTTP/1.1 POST 请求头，将 RTMPT 命令和客户端信息写入 URI 路径，
+ * 随后依次发送请求头和负载缓冲区内容，并更新消息计数与未确认计数。
+ * 
+ * @param[in,out] r        指向 RTMP 会话上下文的指针。从中读取目标主机、
+ *                          端口、客户端标识、消息计数等信息，并更新
+ *                          m_msgCounter 和 m_unackd 字段。
+ * @param[in]     cmd      RTMPT 命令类型，用于生成请求 URI 中的命令名称。
+ * @param[in]     buf      待发送的 HTTP 正文（负载数据）缓冲区。
+ * @param[in]     len      buf 缓冲区的有效数据长度（字节数）。
+ * 
+ * @return 实际发送的负载字节数（通过 RTMPSockBuf_Send 返回）。
+ * @retval >=0  发送成功，返回值为已发送的字节数。
+ * @retval <0   发送失败，返回值为错误码。
+ */
 static int
 HTTP_Post(RTMP *r, RTMPTCmd cmd, const char *buf, int len)
 {
